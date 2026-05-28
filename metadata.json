@@ -1,0 +1,6 @@
+{
+  "name": "Grace Bible",
+  "description": "An elegant multi-version Bible application with custom offline access, study notes, dynamic highlights, scripture references, daily plans, and interactive insights.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -211,10 +211,59 @@ object GeminiClient {
         }
         return passageList
     }
+
+    /**
+     * Dynamically fetches full standard verses for any chapter of any Bible Book.
+     */
+    suspend fun fetchChapterVerses(book: String, chapter: Int, translation: String): List<GeminiVerse> = withContext(Dispatchers.IO) {
+        val apiKey = BuildConfig.GEMINI_API_KEY
+        if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
+            throw IllegalStateException("API Key is missing or default placeholder value.")
+        }
+
+        val fullTrans = if (translation == "KJV") "King James Version" else "World English Bible"
+        val prompt = """
+            Generate the accurate, complete, authentic, consecutive verses of the book of "$book" Chapter $chapter in the $fullTrans Bible translation.
+            Do not skip verses. Do not summarize. Retrieve the real, full, literal biblical verses starting from verse 1 to the end of the chapter.
+            Only output a fully valid JSON array of objects.
+            
+            Every object in the array MUST contain exactly these fields:
+            - "v": integer (the verse number, e.g., 1, 2, 3...)
+            - "t": string (the actual full scripture text of this verse)
+
+            Example JSON format:
+            [
+              {"v": 1, "t": "In the beginning God created the heaven and the earth."},
+              {"v": 2, "t": "And the earth was without form, and void; and darkness was upon the face of the deep..."}
+            ]
+
+            Only return the JSON. Do not write any markdown codeblock characters (such as ```json) or preamble.
+        """.trimIndent()
+
+        val responseText = makeApiCall(apiKey, prompt)
+        val jsonText = cleanJsonResponse(parseResponseText(responseText))
+        val jsonArray = JSONArray(jsonText)
+        val result = mutableListOf<GeminiVerse>()
+        for (i in 0 until jsonArray.length()) {
+            val obj = jsonArray.getJSONObject(i)
+            result.add(
+                GeminiVerse(
+                    v = obj.getInt("v"),
+                    t = obj.getString("t")
+                )
+            )
+        }
+        return@withContext result
+    }
 }
 
 data class GeneratedDayPlan(
     val day: Int,
     val passage: String,
     val notes: String
+)
+
+data class GeminiVerse(
+    val v: Int,
+    val t: String
 )

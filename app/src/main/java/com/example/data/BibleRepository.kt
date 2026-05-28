@@ -131,4 +131,22 @@ class BibleRepository(private val bibleDao: BibleDao) {
     suspend fun getChapterIllustrationDescription(book: String, chapter: Int): String {
         return GeminiClient.getChapterIllustration(book, chapter)
     }
+
+    suspend fun downloadChapterFromAi(book: String, chapter: Int, translation: String) {
+        val geminiVerses = GeminiClient.fetchChapterVerses(book, chapter, translation)
+        val bookId = BibleMeta.bookMap[book]?.id ?: 1
+        val dbVerses = geminiVerses.map { gv ->
+            BibleVerse(
+                translation = translation,
+                book = book,
+                bookId = bookId,
+                chapter = chapter,
+                verse = gv.v,
+                text = gv.t
+            )
+        }
+        if (dbVerses.isNotEmpty()) {
+            bibleDao.insertVerses(dbVerses)
+        }
+    }
 }

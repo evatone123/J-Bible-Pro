@@ -27,15 +27,6 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedChapter = MutableStateFlow(1)
     val selectedChapter: StateFlow<Int> = _selectedChapter.asStateFlow()
 
-    // Map of books to their preloaded chapters
-    val preloadedBooksMap = mapOf(
-        "Genesis" to listOf(1),
-        "Psalms" to listOf(23, 121),
-        "Proverbs" to listOf(3),
-        "Matthew" to listOf(5),
-        "John" to listOf(1)
-    )
-
     // Current active chapter verses
     val activeVerses: StateFlow<List<BibleVerse>> = combine(
         selectedTranslation,
@@ -101,11 +92,18 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
     private val _isGeneratingPlan = MutableStateFlow(false)
     val isGeneratingPlan: StateFlow<Boolean> = _isGeneratingPlan.asStateFlow()
 
+    private val _isChapterDownloading = MutableStateFlow(false)
+    val isChapterDownloading: StateFlow<Boolean> = _isChapterDownloading.asStateFlow()
+
+    private val _chapterDownloadError = MutableStateFlow<String?>(null)
+    val chapterDownloadError: StateFlow<String?> = _chapterDownloadError.asStateFlow()
+
     // --- Helper lists ---
-    val booksList = preloadedBooksMap.keys.toList()
+    val booksList = BibleMeta.books.map { it.name }
 
     fun getChaptersForBook(book: String): List<Int> {
-        return preloadedBooksMap[book] ?: listOf(1)
+        val totalChaps = BibleMeta.bookMap[book]?.chapters ?: 1
+        return (1..totalChaps).toList()
     }
 
     // --- Actions ---
@@ -230,5 +228,27 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
     private fun clearChapterIllustration() {
         _illustrationText.value = ""
         _aiInsightText.value = ""
+        _chapterDownloadError.value = null
+    }
+
+    fun downloadSelectedChapter() {
+        val book = _selectedBook.value
+        val chapter = _selectedChapter.value
+        val translation = _selectedTranslation.value
+        viewModelScope.launch {
+            _isChapterDownloading.value = true
+            _chapterDownloadError.value = null
+            try {
+                repository.downloadChapterFromAi(book, chapter, translation)
+            } catch (e: Exception) {
+                _chapterDownloadError.value = "Failed to load chapter online. Please verify your Gemini API Key in AI Studio Secrets, check internet connectivity, and try again."
+            } finally {
+                _isChapterDownloading.value = false
+            }
+        }
+    }
+
+    fun clearChapterDownloadError() {
+        _chapterDownloadError.value = null
     }
 }

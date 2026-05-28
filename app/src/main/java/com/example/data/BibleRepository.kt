@@ -26,6 +26,15 @@ class BibleRepository(private val bibleDao: BibleDao) {
         return bibleDao.getVerseCount()
     }
 
+    suspend fun getVerseCountForTranslation(translation: String): Int {
+        return bibleDao.getVerseCountForTranslation(translation)
+    }
+
+    suspend fun insertPreloadedData(verses: List<BibleVerse>, plans: List<ReadingPlan>) {
+        bibleDao.insertVerses(verses)
+        bibleDao.insertReadingPlans(plans)
+    }
+
     // --- Highlights ---
     val allHighlights: Flow<List<UserHighlight>> = bibleDao.getAllHighlights()
 

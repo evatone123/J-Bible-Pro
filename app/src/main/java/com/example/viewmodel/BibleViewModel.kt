@@ -13,8 +13,22 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
     private val scope = viewModelScope
 
     init {
-        val database = BibleDatabase.getDatabase(application, scope)
+        val database = BibleDatabase.getDatabase(application)
         repository = BibleRepository(database.bibleDao())
+        
+        // Safely check and preload scriptures offline on start without database callback deadlocks
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                if (repository.getVerseCount() == 0) {
+                    val preloadedVerses = PreloadedBibleData.getPreloadedVerses()
+                    val preloadedPlans = PreloadedBibleData.getPreloadedPlans()
+                    repository.insertPreloadedData(preloadedVerses, preloadedPlans)
+                }
+                updateLocalStats()
+            } catch (e: Exception) {
+                android.util.Log.e("BibleViewModel", "Failed to preload scriptures offline", e)
+            }
+        }
     }
 
     // --- State Variables ---
@@ -177,7 +191,7 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun createCustomReadingPlan(topic: String, onSuccess: (ReadingPlan) -> Unit) {
-        if (topic.trim().isEmpty()) return
+        if (topic.trim().isEmpty() || _isGeneratingPlan.value) return
         viewModelScope.launch {
             _isGeneratingPlan.value = true
             try {
@@ -194,6 +208,7 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Gemini AI Request Triggers ---
     fun requestAiVerseInsight(verse: BibleVerse) {
+        if (_isAiInsightLoading.value) return
         viewModelScope.launch {
             _isAiInsightLoading.value = true
             _aiInsightText.value = ""
@@ -209,6 +224,7 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun requestChapterIllustration() {
+        if (_isIllustrationLoading.value) return
         val book = _selectedBook.value
         val chapter = _selectedChapter.value
         viewModelScope.launch {
@@ -232,6 +248,7 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun downloadSelectedChapter() {
+        if (_isChapterDownloading.value) return
         val book = _selectedBook.value
         val chapter = _selectedChapter.value
         val translation = _selectedTranslation.value
@@ -250,5 +267,144 @@ class BibleViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearChapterDownloadError() {
         _chapterDownloadError.value = null
+    }
+
+    // --- Cached Stats ---
+    private val _webVerseCount = MutableStateFlow(0)
+    val webVerseCount: StateFlow<Int> = _webVerseCount.asStateFlow()
+
+    private val _kjvVerseCount = MutableStateFlow(0)
+    val kjvVerseCount: StateFlow<Int> = _kjvVerseCount.asStateFlow()
+
+    fun updateLocalStats() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _webVerseCount.value = repository.getVerseCountForTranslation("WEB")
+            _kjvVerseCount.value = repository.getVerseCountForTranslation("KJV")
+        }
+    }
+
+    // --- Bulk Caching Downloader ---
+    private val _isBulkDownloading = MutableStateFlow(false)
+    val isBulkDownloading: StateFlow<Boolean> = _isBulkDownloading.asStateFlow()
+
+    private val _bulkDownloadProgress = MutableStateFlow(0f)
+    val bulkDownloadProgress: StateFlow<Float> = _bulkDownloadProgress.asStateFlow()
+
+    private val _bulkDownloadStatus = MutableStateFlow("")
+    val bulkDownloadStatus: StateFlow<String> = _bulkDownloadStatus.asStateFlow()
+
+    private val _bulkDownloadError = MutableStateFlow<String?>(null)
+    val bulkDownloadError: StateFlow<String?> = _bulkDownloadError.asStateFlow()
+
+    fun downloadEntireBibleOffline(translation: String, scope: String = "ALL") {
+        if (_isBulkDownloading.value) return
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            _isBulkDownloading.value = true
+            _bulkDownloadError.value = null
+            _bulkDownloadProgress.value = 0f
+            _bulkDownloadStatus.value = "Initiating bulk caching stream..."
+            
+            try {
+                val okClient = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(12, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+
+                val targetBooks = when(scope) {
+                    "OT" -> BibleMeta.books.filter { it.testament == "Old Testament" }
+                    "NT" -> BibleMeta.books.filter { it.testament == "New Testament" }
+                    else -> BibleMeta.books
+                }
+
+                val totalChapters = targetBooks.sumOf { it.chapters }
+                val completedChapters = java.util.concurrent.atomic.AtomicInteger(0)
+
+                for (book in targetBooks) {
+                    if (_bulkDownloadError.value != null) break
+                    
+                    val bookName = book.name
+                    val bookId = book.id
+                    val chapterCount = book.chapters
+                    val versesToInsert = java.util.Collections.synchronizedList(mutableListOf<BibleVerse>())
+                    
+                    _bulkDownloadStatus.value = "Caching book: $bookName..."
+                    
+                    // Controlled parallel downloads
+                    val semaphore = kotlinx.coroutines.sync.Semaphore(5)
+                    
+                    val jobs = (1..chapterCount).map { chapter ->
+                        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            semaphore.acquire()
+                            try {
+                                if (_bulkDownloadError.value == null) {
+                                    val url = "https://bible-api.com/${java.net.URLEncoder.encode("$bookName $chapter", "UTF-8")}?translation=${translation.lowercase()}"
+                                    val request = okhttp3.Request.Builder().url(url).build()
+                                    
+                                    okClient.newCall(request).execute().use { response ->
+                                        if (response.isSuccessful) {
+                                            val bodyStr = response.body?.string() ?: ""
+                                            if (bodyStr.isNotEmpty()) {
+                                                val jsonObj = org.json.JSONObject(bodyStr)
+                                                val versesArr = jsonObj.getJSONArray("verses")
+                                                val tempVerses = mutableListOf<BibleVerse>()
+                                                for (i in 0 until versesArr.length()) {
+                                                    val vObj = versesArr.getJSONObject(i)
+                                                    val verseNum = vObj.getInt("verse")
+                                                    val verseText = vObj.getString("text").trim()
+                                                    tempVerses.add(
+                                                        BibleVerse(
+                                                            translation = translation.uppercase(),
+                                                            book = bookName,
+                                                            bookId = bookId,
+                                                            chapter = chapter,
+                                                            verse = verseNum,
+                                                            text = verseText
+                                                        )
+                                                    )
+                                                }
+                                                versesToInsert.addAll(tempVerses)
+                                            }
+                                        } else {
+                                            android.util.Log.e("BibleViewModel", "Error fetch $bookName $chapter: ${response.code}")
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("BibleViewModel", "Failed chapter download: $bookName $chapter", e)
+                            } finally {
+                                semaphore.release()
+                                val currentCount = completedChapters.incrementAndGet()
+                                val currentProgress = currentCount.toFloat() / totalChapters.toFloat()
+                                _bulkDownloadProgress.value = currentProgress
+                                _bulkDownloadStatus.value = "Cached $bookName Chapter $chapter ($currentCount/$totalChapters)..."
+                            }
+                        }
+                    }
+                    
+                    jobs.forEach { it.join() }
+
+                    // Save this book's scriptures to database in a clean block transaction
+                    if (versesToInsert.isNotEmpty()) {
+                        repository.insertPreloadedData(versesToInsert.toList(), emptyList())
+                        updateLocalStats()
+                    }
+                    
+                    // Mild delay for API-friendliness
+                    kotlinx.coroutines.delay(80)
+                }
+                
+                if (_bulkDownloadError.value == null) {
+                    _bulkDownloadStatus.value = "$translation Bible is fully cached and offline-ready!"
+                    _bulkDownloadProgress.value = 1f
+                }
+                updateLocalStats()
+                kotlinx.coroutines.delay(2000)
+            } catch (e: Exception) {
+                android.util.Log.e("BibleViewModel", "Bulk download failed", e)
+                _bulkDownloadError.value = "Failed to cache offline scriptures: ${e.message}"
+            } finally {
+                _isBulkDownloading.value = false
+            }
+        }
     }
 }

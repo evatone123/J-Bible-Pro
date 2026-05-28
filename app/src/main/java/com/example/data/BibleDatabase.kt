@@ -28,34 +28,17 @@ abstract class BibleDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: BibleDatabase? = null
 
-        fun getDatabase(context: Context, scope: CoroutineScope): BibleDatabase {
+        fun getDatabase(context: Context): BibleDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     BibleDatabase::class.java,
                     "grace_bible_database"
                 )
-                .addCallback(BibleDatabaseCallback(scope))
+                .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance
                 instance
-            }
-        }
-    }
-
-    private class BibleDatabaseCallback(
-        private val scope: CoroutineScope
-    ) : RoomDatabase.Callback() {
-        override fun onCreate(db: SupportSQLiteDatabase) {
-            super.onCreate(db)
-            INSTANCE?.let { database ->
-                scope.launch(Dispatchers.IO) {
-                    val dao = database.bibleDao()
-                    // Populate initial scriptures
-                    dao.insertVerses(PreloadedBibleData.getPreloadedVerses())
-                    // Populate reading plans
-                    dao.insertReadingPlans(PreloadedBibleData.getPreloadedPlans())
-                }
             }
         }
     }

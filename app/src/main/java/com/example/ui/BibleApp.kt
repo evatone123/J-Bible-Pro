@@ -48,8 +48,13 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.BibleVerse
 import com.example.data.ReadingPlan
+import com.example.data.BibleMeta
 import com.example.api.GeneratedDayPlan
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material3.Surface
 import com.example.viewmodel.BibleViewModel
 import org.json.JSONArray
 import org.json.JSONObject
@@ -229,8 +234,27 @@ fun ReaderScreen(viewModel: BibleViewModel) {
     val downloadError by viewModel.chapterDownloadError.collectAsStateWithLifecycle()
 
     var selectedVerseForAction by remember { mutableStateOf<BibleVerse?>(null) }
-    var bookDropdownExpanded by remember { mutableStateOf(false) }
-    var chapterDropdownExpanded by remember { mutableStateOf(false) }
+    var bookPickerOpen by remember { mutableStateOf(false) }
+    var chapterPickerOpen by remember { mutableStateOf(false) }
+
+    if (bookPickerOpen) {
+        BookPickerDialog(
+            books = viewModel.booksList,
+            currentBook = selectedBook,
+            onBookSelected = { bk -> viewModel.selectBook(bk) },
+            onDismiss = { bookPickerOpen = false }
+        )
+    }
+
+    if (chapterPickerOpen) {
+        ChapterPickerDialog(
+            bookName = selectedBook,
+            chapters = viewModel.getChaptersForBook(selectedBook),
+            currentChapter = selectedChapter,
+            onChapterSelected = { chap -> viewModel.selectChapter(chap) },
+            onDismiss = { chapterPickerOpen = false }
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Book & Chapter Pickers Row
@@ -243,7 +267,7 @@ fun ReaderScreen(viewModel: BibleViewModel) {
             // Book Selector Button
             Box(modifier = Modifier.weight(1.5f)) {
                 OutlinedButton(
-                    onClick = { bookDropdownExpanded = true },
+                    onClick = { bookPickerOpen = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("book_picker"),
@@ -259,26 +283,12 @@ fun ReaderScreen(viewModel: BibleViewModel) {
                         Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                     }
                 }
-                DropdownMenu(
-                    expanded = bookDropdownExpanded,
-                    onDismissRequest = { bookDropdownExpanded = false }
-                ) {
-                    viewModel.booksList.forEach { bk ->
-                        DropdownMenuItem(
-                            text = { Text(bk) },
-                            onClick = {
-                                viewModel.selectBook(bk)
-                                bookDropdownExpanded = false
-                            }
-                        )
-                    }
-                }
             }
 
             // Chapter Selector Button
             Box(modifier = Modifier.weight(1f)) {
                 OutlinedButton(
-                    onClick = { chapterDropdownExpanded = true },
+                    onClick = { chapterPickerOpen = true },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("chapter_picker"),
@@ -292,20 +302,6 @@ fun ReaderScreen(viewModel: BibleViewModel) {
                     ) {
                         Text("Ch. $selectedChapter")
                         Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                    }
-                }
-                DropdownMenu(
-                    expanded = chapterDropdownExpanded,
-                    onDismissRequest = { chapterDropdownExpanded = false }
-                ) {
-                    viewModel.getChaptersForBook(selectedBook).forEach { chap ->
-                        DropdownMenuItem(
-                            text = { Text("Chapter $chap") },
-                            onClick = {
-                                viewModel.selectChapter(chap)
-                                chapterDropdownExpanded = false
-                            }
-                        )
                     }
                 }
             }
@@ -1432,16 +1428,21 @@ fun ExplorerScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf("notes" to "My Notes (✍️)", "highlights" to "Highlights (🎨)").forEach { (t, lbl) ->
+            listOf("notes" to "Notes (✍️)", "highlights" to "Highlights (🎨)", "offline" to "Cache (💾)").forEach { (t, lbl) ->
                 val isSelected = activeSubTab == t
                 Button(
-                    onClick = { activeSubTab = t },
+                    onClick = { 
+                        activeSubTab = t
+                        if (t == "offline") {
+                            viewModel.updateLocalStats()
+                        }
+                    },
                     modifier = Modifier
                         .weight(1f)
-                        .padding(horizontal = 4.dp)
+                        .padding(horizontal = 2.dp)
                         .testTag("explorer_subtab_$t"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (isSelected) MaterialTheme.colorScheme.primary
@@ -1449,9 +1450,10 @@ fun ExplorerScreen(
                         contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary
                         else MaterialTheme.colorScheme.onSecondaryContainer
                     ),
-                    shape = RoundedCornerShape(24.dp)
+                    shape = RoundedCornerShape(24.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
                 ) {
-                    Text(lbl, fontSize = 13.sp)
+                    Text(lbl, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
             }
         }
@@ -1563,7 +1565,7 @@ fun ExplorerScreen(
                     }
                 }
             }
-        } else {
+        } else if (activeSubTab == "highlights") {
             // Highlights list
             if (highlights.isEmpty()) {
                 Box(
@@ -1645,6 +1647,301 @@ fun ExplorerScreen(
                                         contentDescription = "Go to verse in context",
                                         tint = MaterialTheme.colorScheme.onSurface
                                     )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (activeSubTab == "offline") {
+            val isBulkDownloading by viewModel.isBulkDownloading.collectAsStateWithLifecycle()
+            val bulkDownloadProgress by viewModel.bulkDownloadProgress.collectAsStateWithLifecycle()
+            val bulkDownloadStatus by viewModel.bulkDownloadStatus.collectAsStateWithLifecycle()
+            val bulkDownloadError by viewModel.bulkDownloadError.collectAsStateWithLifecycle()
+
+            val webCount by viewModel.webVerseCount.collectAsStateWithLifecycle()
+            val kjvCount by viewModel.kjvVerseCount.collectAsStateWithLifecycle()
+
+            var selectedBulkScope by remember { mutableStateOf("ALL") }
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudQueue,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    "Offline Library Cache",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                "Empower your spiritual search with local, offline-accessible scriptures! Cache entire translations or specific testaments from public servers so they are immediately active even in network blackout zones.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("caching_status_card"),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            Text(
+                                "LOCAL STORAGE METRICS",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.height(14.dp))
+                            
+                            // WEB stats
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("World English Bible (WEB)", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        if (webCount >= 31102) "Fully Cached (31,102)" else "$webCount / 31,102 verses",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (webCount >= 31102) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                LinearProgressIndicator(
+                                    progress = { (webCount.toFloat() / 31102f).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(18.dp))
+
+                            // KJV stats
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("King James Version (KJV)", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        if (kjvCount >= 31102) "Fully Cached (31,102)" else "$kjvCount / 31,102 verses",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (kjvCount >= 31102) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                LinearProgressIndicator(
+                                    progress = { (kjvCount.toFloat() / 31102f).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (isBulkDownloading) {
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("bulk_downloading_progress_card"),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(20.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        strokeWidth = 3.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        "Buffering Local Caches...",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+                                LinearProgressIndicator(
+                                    progress = { bulkDownloadProgress },
+                                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        bulkDownloadStatus,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "${(bulkDownloadProgress * 100).toInt()}%",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (bulkDownloadError != null) {
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("bulk_download_error_card"),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(20.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Error,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text("Caching Exception", fontWeight = FontWeight.Bold)
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(bulkDownloadError ?: "", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+
+                if (!isBulkDownloading) {
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("bulk_controls_card"),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Column(modifier = Modifier.padding(20.dp)) {
+                                Text(
+                                    "CHOOSE CACHING SCOPE",
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf(
+                                        "ALL" to "Complete Bible",
+                                        "NT" to "New Testament",
+                                        "OT" to "Old Testament"
+                                    ).forEach { (s, label) ->
+                                        val isSel = selectedBulkScope == s
+                                        Button(
+                                            onClick = { selectedBulkScope = s },
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("scope_btn_$s"),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (isSel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+                                                contentColor = if (isSel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer
+                                            ),
+                                            shape = RoundedCornerShape(12.dp),
+                                            contentPadding = PaddingValues(vertical = 8.dp)
+                                        ) {
+                                            Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                        }
+                                    }
+                                }
+                                
+                                Spacer(modifier = Modifier.height(20.dp))
+                                
+                                Button(
+                                    onClick = { viewModel.downloadEntireBibleOffline("WEB", selectedBulkScope) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("bulk_download_web_btn"),
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                ) {
+                                    Icon(Icons.Default.CloudDownload, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Cache WEB Selection", fontWeight = FontWeight.Bold)
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Button(
+                                    onClick = { viewModel.downloadEntireBibleOffline("KJV", selectedBulkScope) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("bulk_download_kjv_btn"),
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                ) {
+                                    Icon(Icons.Default.CloudDownload, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Cache KJV Selection", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -1788,4 +2085,247 @@ fun IconBox(icon: androidx.compose.ui.graphics.vector.ImageVector, contentDescri
         modifier = Modifier.size(size),
         tint = tint
     )
+}
+
+@Composable
+fun BookPickerDialog(
+    books: List<String>,
+    currentBook: String,
+    onBookSelected: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    
+    val filteredBooks = remember(searchQuery, books) {
+        if (searchQuery.isBlank()) {
+            books
+        } else {
+            books.filter { it.contains(searchQuery, ignoreCase = true) }
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .padding(vertical = 16.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp)
+            ) {
+                Text(
+                    text = "Select Book",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search books...") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                )
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val otBooks = filteredBooks.filter { BibleMeta.bookMap[it]?.testament == "Old Testament" }
+                    val ntBooks = filteredBooks.filter { BibleMeta.bookMap[it]?.testament == "New Testament" }
+
+                    if (otBooks.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "Old Testament",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                        otBooks.forEach { bk ->
+                            item {
+                                BookRowItem(
+                                    book = bk,
+                                    isSelected = bk == currentBook,
+                                    onClick = {
+                                        onBookSelected(bk)
+                                        onDismiss()
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (ntBooks.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "New Testament",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                        ntBooks.forEach { bk ->
+                            item {
+                                BookRowItem(
+                                    book = bk,
+                                    isSelected = bk == currentBook,
+                                    onClick = {
+                                        onBookSelected(bk)
+                                        onDismiss()
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Close")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BookRowItem(
+    book: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+    val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+    
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(containerColor)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = book,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                    color = contentColor
+                )
+            )
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Selected",
+                    tint = contentColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ChapterPickerDialog(
+    bookName: String,
+    chapters: List<Int>,
+    currentChapter: Int,
+    onChapterSelected: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.75f)
+                .padding(vertical = 16.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp)
+            ) {
+                Text(
+                    text = "$bookName Chapters",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                    columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(5),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    chapters.forEach { chap ->
+                        item {
+                            val isSelected = chap == currentChapter
+                            val containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+                            val contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer
+                            
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .aspectRatio(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(containerColor)
+                                    .clickable {
+                                        onChapterSelected(chap)
+                                        onDismiss()
+                                    }
+                            ) {
+                                Text(
+                                    text = "$chap",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = contentColor
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Close")
+                }
+            }
+        }
+    }
 }

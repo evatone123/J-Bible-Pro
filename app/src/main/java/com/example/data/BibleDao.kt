@@ -18,6 +18,9 @@ interface BibleDao {
     @Query("SELECT COUNT(*) FROM bible_verses")
     suspend fun getVerseCount(): Int
 
+    @Query("SELECT COUNT(*) FROM bible_verses WHERE translation = :translation")
+    suspend fun getVerseCountForTranslation(translation: String): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertVerses(verses: List<BibleVerse>)
 
